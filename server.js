@@ -1,15 +1,22 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const bodyParser = require('body-parser');
-const crypto = require('crypto');
-require('dotenv').config();
-const path = require('path');
+import dotenv from 'dotenv';
+import express from 'express';
+import mongoose from 'mongoose';
+import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import bodyParser from 'body-parser';
+import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import DevCraftorSDK from '@devcraftor/sdk';
+
+// For __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config();
 
 const app = express();
-
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
@@ -886,18 +893,19 @@ server.on('error', (err) => {
 });
 
 // Create Cashfree payment order and return payment link (secure, backend-only)
-app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res) => {
+app.post('/api/payments/devcraftor/create-order', authMiddleware, async (req, res) => {
     try {
-        const { items, shippingAddress, totalAmount, returnUrl } = req.body;
 
-        if (!items || !Array.isArray(items) || items.length === 0) {
+       
+        const { items, shippingAddress, totalAmount } = req.body;
+
+        if (!items || !Array.isArray(items) || items.length === 0)
             return res.status(400).json({ error: 'Order must contain items' });
-        }
-        if (!totalAmount || totalAmount <= 0) {
-            return res.status(400).json({ error: 'Invalid total amount' });
-        }
 
-        // Validate stock availability before creating order
+        if (!totalAmount || totalAmount <= 0)
+            return res.status(400).json({ error: 'Invalid total amount' });
+
+        // ✅ Stock validation
         const stockValidationErrors = [];
         for (const item of items) {
             const medicine = await Medicine.findById(item.medicine);
@@ -905,225 +913,73 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
                 stockValidationErrors.push(`${item.name || 'Unknown item'}: Medicine not found`);
                 continue;
             }
-            
             const availableQty = (medicine.totalQty || 0) - (medicine.soldQty || 0);
             if (availableQty < item.quantity) {
-                stockValidationErrors.push(`${item.name || medicine.name}: Only ${availableQty} units available, requested ${item.quantity}`);
+                stockValidationErrors.push(`${item.name || medicine.name}: Only ${availableQty} available, requested ${item.quantity}`);
             }
         }
-        
-        if (stockValidationErrors.length > 0) {
-            return res.status(400).json({ 
-                error: 'Insufficient stock for some items',
-                details: stockValidationErrors
-            });
+
+        if (stockValidationErrors.length > 0)
+            return res.status(400).json({ error: 'Insufficient stock', details: stockValidationErrors });
+
+        // ✅ Order ID
+        const orderId = "ORD" + Date.now();
+
+        // ✅ Initialize DevCraftor SDK
+        const sdk = new DevCraftorSDK();
+        const payment = sdk.initPayment({
+            key: process.env.DEVCRAFTOR_TOKEN,
+            apiKey: process.env.DEVCRAFTOR_API_KEY,
+            secret: process.env.DEVCRAFTOR_SECRET
+        });
+
+        // ✅ Create DevCraftor Payment
+        const payRes = await payment.createPayment({
+            orderId,
+            txnAmount: Number(totalAmount).toFixed(2),
+            txnNote: "Order from Anvik Biotecch",
+            cust_Mobile: shippingAddress?.phone || req.user?.phone || '',
+            cust_Email: shippingAddress?.email || req.user?.email || '',
+        });
+
+        if (!payRes.paymentUrl) {
+            return res.status(500).json({ error: "Failed to generate payment URL" });
         }
 
-        // Generate internal order ID
-        const orderId = 'ORD' + Date.now();
-
-        // Use a secure URL for Cashfree return URL
-        const returnUrlWithParams = 'https://anvikbiotecch.com/payment/success?order_id={order_id}&txStatus={txStatus}';
-        
-        // Fallback URLs for local testing
-        const localReturnUrl = 'https://webhook.site/payment-test?order_id={order_id}&txStatus={txStatus}';
-
-        // Prepare payload for Cashfree /pg/orders (API v2022-09-01)
-        const cfPayload = {
-            order_id: orderId,
-            order_amount: Number(totalAmount).toFixed(2),
-            order_currency: "INR",
-            order_note: "Order from Anvik Biotecch",
-            customer_details: {
-                customer_id: req.user ? req.user._id.toString() : `GUEST${Date.now()}`,
-                customer_email: shippingAddress?.email || req.user?.email || '',
-                customer_phone: shippingAddress?.phone || req.user?.phone || '',
-                customer_name: shippingAddress?.name || req.user?.name || 'Guest Customer'
-            },
-            order_meta: {
-                return_url: 'https://webhook.site/9a123456-7890-1234-5678-1234567890ab',
-                notify_url: 'https://webhook.site/9a123456-7890-1234-5678-1234567890ab'
-            },
-            order_splits: [],
-            order_tags: {
-                source: "anvik_biotecch"
-            }
-            
-        };
-
-        // Call Cashfree /pg/orders API (v2022-09-01) with production credentials
-        let cfResp;
-        let cfJson;
-
-        try {
-            // Log the request we're about to make
-            console.log('Making Cashfree API request:', {
-                url: `${CASHFREE_BASE}/orders`,
-                clientId: CASHFREE_APP_ID,
-                payload: cfPayload
-            });
-
-            // First test API connectivity
-            const isApiAccessible = await testCashfreeAPI();
-            if (!isApiAccessible) {
-                throw new Error('Cashfree API is currently inaccessible');
-            }
-
-            // Create new order
-            cfResp = await fetch(CASHFREE_ORDERS_URL, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json',
-                    'x-client-id': CASHFREE_APP_ID,
-                    'x-client-secret': CASHFREE_SECRET,
-                    'x-api-version': CASHFREE_API_VERSION
-                },
-                body: JSON.stringify(cfPayload)
-            });
-
-            // Log complete response details
-            console.log('Cashfree API Response:', {
-                status: cfResp.status,
-                statusText: cfResp.statusText,
-                headers: Object.fromEntries(cfResp.headers)
-            });
-        } catch (netErr) {
-            console.error('Network error while calling Cashfree:', {
-                error: netErr.message,
-                stack: netErr.stack,
-                code: netErr.code
-            });
-            return res.status(502).json({ error: 'Payment gateway unreachable', details: netErr.message });
-        }
-
-        if (!cfResp) {
-            console.error('Cashfree create order failed: no response received');
-            return res.status(502).json({ error: 'Payment gateway unreachable' });
-        }
-
-        // Try parsing JSON response; if parsing fails include raw text in logs
-        let responseText;
-        try {
-            responseText = await cfResp.text();
-            console.log('Raw Cashfree response:', responseText);
-            
-            try {
-                cfJson = JSON.parse(responseText);
-            } catch (parseErr) {
-                console.error('Failed to parse Cashfree response as JSON:', {
-                    error: parseErr.message,
-                    responseText: responseText
-                });
-                return res.status(502).json({ 
-                    error: 'Invalid response from payment gateway',
-                    details: responseText
-                });
-            }
-        } catch (textErr) {
-            console.error('Failed to read Cashfree response:', textErr);
-            return res.status(502).json({ error: 'Could not read payment gateway response' });
-        }
-
-        if (!cfResp.ok) {
-            console.error('Cashfree API error:', {
-                status: cfResp.status,
-                statusText: cfResp.statusText,
-                response: cfJson,
-                url: cfResp.url
-            });
-            return res.status(502).json({ 
-                error: 'Payment gateway error',
-                message: cfJson.message || cfJson.error_description || 'Unknown error',
-                code: cfJson.code || cfJson.type,
-                status: cfResp.status
-            });
-        }
-
-        // Parse and validate the response
-        console.log('Raw Cashfree Response:', JSON.stringify(cfJson, null, 2));
-        
-        // Check for API-level errors first
-        if (cfJson.type === 'error' || cfJson.error) {
-            console.error('Cashfree API Error:', cfJson);
-            return res.status(400).json({
-                error: 'Payment gateway error',
-                message: cfJson.message || cfJson.error_description || 'Failed to create payment',
-                code: cfJson.code || cfJson.error_type
-            });
-        }
-        
-        const cfData = cfJson.data || cfJson;
-        console.log('Extracted CF Data:', JSON.stringify(cfData, null, 2));
-        
-        // Get payment session link
-        let paymentLink = cfData.payment_link;  // Primary field
-        
-        if (!paymentLink) {
-            // Try alternative fields
-            const possibleFields = [
-                cfData.payment_session_id && `https://payments.cashfree.com/order/#${cfData.payment_session_id}`,
-                cfData.payment_session_url,
-                cfData.checkout_url,
-                cfData.url,
-                cfJson.payment_link,
-                cfJson.url
-            ];
-            
-            paymentLink = possibleFields.find(link => typeof link === 'string' && link.length > 0);
-        }
-        
-        if (!paymentLink) {
-            if (cfData.payment_session_id) {
-                // If we have a session ID but no direct URL, construct the hosted checkout URL
-                paymentLink = `https://payments.cashfree.com/order/#${cfData.payment_session_id}`;
-            } else {
-                console.error('No payment link found in response:', cfJson);
-                return res.status(502).json({ error: 'No payment link in response', details: cfData });
-            }
-        }
-        
-        // Create order in our DB with payment info
+        // ✅ Save order in DB
         const order = new Order({
             orderId,
-            items: items.map(item => ({
-                medicine: item.medicine,
-                name: item.name,
-                price: item.price,
-                quantity: item.quantity
+            items: items.map(i => ({
+                medicine: i.medicine,
+                name: i.name,
+                price: i.price,
+                quantity: i.quantity
             })),
-            shippingAddress: shippingAddress || {},
-            paymentMethod: 'cashfree',
+            shippingAddress,
+            paymentMethod: 'devcraftor',
             totalAmount: Number(totalAmount),
             orderStatus: 'pending',
             paymentStatus: 'pending',
             customer: req.user ? req.user._id : null,
-            cashfreeOrderId: cfData.order_id || cfData.cf_order_id || orderId
+            providerOrderId: orderId 
         });
 
         await order.save();
 
-        console.log('Order saved successfully:', {
-            orderId: order.orderId,
-            cashfreeOrderId: cfData.cf_order_id || cfData.order_id,
-            paymentLink: paymentLink,
-            totalAmount: order.totalAmount
-        });
-        
-        // Return response with everything the frontend needs
         res.json({
             success: true,
-            message: 'Payment order created',
-            order: { 
-                orderId: order.orderId,
+            message: "Payment order created",
+            paymentLink: payRes.paymentUrl,
+            order: {
+                orderId,
                 id: order._id,
                 amount: order.totalAmount
-            },
-            paymentLink: paymentLink
+            }
         });
-    } catch (error) {
-        console.error('Error creating cashfree order:', error);
-        res.status(500).json({ error: error.message });
+
+    } catch (err) {
+        console.error("DevCraftor Error", err.message);
+        res.status(500).json({ error: err.message });
     }
 });
 
