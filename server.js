@@ -940,8 +940,8 @@ app.post('/api/payments/cashfree/create-order', async (req, res) => {
             },
         });
 
+        
 
-        console.log("DevCraftor Payment Link Response:", response.data);
         if (!response.data.data.paymentUrl) {
             return res.status(500).json({ error: "Failed to generate payment URL" });
         }
@@ -978,7 +978,7 @@ app.post('/api/payments/cashfree/create-order', async (req, res) => {
         });
 
     } catch (err) {
-        console.error("DevCraftor Error", err.message);
+        console.error("DevCraftor Error", err);
         res.status(500).json({ error: err.message });
     }
 });
