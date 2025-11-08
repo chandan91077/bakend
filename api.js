@@ -1,5 +1,5 @@
 // API service for backend communication
-const API_BASE_URL = 'http://localhost:3000/api';
+const API_BASE_URL = 'https://bakend-88v1.onrender.com/api';
 
 class ApiService {
     constructor() {
@@ -70,16 +70,61 @@ class ApiService {
     }
 
     async addMedicine(medicineData) {
+        // ✅ FIX: Convert batchNumber to batchNo for backend
+        const dataToSend = {
+            name: medicineData.name,
+            batchNo: medicineData.batchNumber, // ✅ Convert to batchNo
+            totalQty: medicineData.totalQty,
+            price: medicineData.price,
+            expiryDate: medicineData.expiryDate,
+            category: medicineData.category,
+            soldQty: medicineData.soldQty || 0
+        };
+
+        // Add optional fields
+        if (medicineData.description) {
+            dataToSend.description = medicineData.description;
+        }
+        if (medicineData.dosage) {
+            dataToSend.dosage = medicineData.dosage;
+        }
+        if (medicineData.image) {
+            dataToSend.image = medicineData.image;
+        }
+
+        console.log('🔍 api-service.js - Sending to backend:', dataToSend);
+        
         return this.request('/medicines', {
             method: 'POST',
-            body: JSON.stringify(medicineData)
+            body: JSON.stringify(dataToSend)
         });
     }
 
     async updateMedicine(id, medicineData) {
+        // ✅ FIX: Convert batchNumber to batchNo for backend
+        const dataToSend = {
+            name: medicineData.name,
+            batchNo: medicineData.batchNumber, // ✅ Convert to batchNo
+            totalQty: medicineData.totalQty,
+            price: medicineData.price,
+            expiryDate: medicineData.expiryDate,
+            category: medicineData.category
+        };
+
+        // Add optional fields
+        if (medicineData.description) {
+            dataToSend.description = medicineData.description;
+        }
+        if (medicineData.dosage) {
+            dataToSend.dosage = medicineData.dosage;
+        }
+        if (medicineData.image) {
+            dataToSend.image = medicineData.image;
+        }
+
         return this.request(`/medicines/${id}`, {
             method: 'PUT',
-            body: JSON.stringify(medicineData)
+            body: JSON.stringify(dataToSend)
         });
     }
 
