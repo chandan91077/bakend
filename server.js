@@ -8,7 +8,7 @@ import bodyParser from 'body-parser';
 import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import DevCraftorSDK from '@devcraftor/sdk';
+import axios from 'axios';
 
 // For __dirname in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -79,7 +79,7 @@ const orderSchema = new mongoose.Schema({
         state: String,
         pincode: String
     },
-    paymentMethod: { type: String, enum: ['cashfree', 'cod'], required: true },
+    paymentMethod: { type: String, enum: ['cashfree', 'cod', 'devcraftor'], required: true },
     paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
     orderStatus: { type: String, enum: ['pending', 'confirmed', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
     cashfreeOrderId: String,
@@ -893,9 +893,8 @@ server.on('error', (err) => {
 });
 
 // Create Cashfree payment order and return payment link (secure, backend-only)
-app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res) => {
+app.post('/api/payments/cashfree/create-order', async (req, res) => {
     try {
-
        
         const { items, shippingAddress, totalAmount } = req.body;
 
@@ -919,30 +918,31 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
             }
         }
 
-        if (stockValidationErrors.length > 0)
-            return res.status(400).json({ error: 'Insufficient stock', details: stockValidationErrors });
+        // if (stockValidationErrors.length > 0)
+        //     return res.status(400).json({ error: 'Insufficient stock', details: stockValidationErrors });
 
         // ✅ Order ID
         const orderId = "ORD" + Date.now();
 
-        // ✅ Initialize DevCraftor SDK
-        const sdk = new DevCraftorSDK();
-        const payment = sdk.initPayment({
-            key: process.env.DEVCRAFTOR_TOKEN,
-            apiKey: process.env.DEVCRAFTOR_API_KEY,
-            secret: process.env.DEVCRAFTOR_SECRET
-        });
 
-        // ✅ Create DevCraftor Payment
-        const payRes = await payment.createPayment({
+        const response = await axios.post(`${process.env.DEVCRAFTOR_BASE_URL}/v2/partner/payment_links`, {
+            token: process.env.DEVCRAFTOR_TOKEN,
             orderId,
             txnAmount: Number(totalAmount).toFixed(2),
             txnNote: "Order from Anvik Biotecch",
             cust_Mobile: shippingAddress?.phone || req.user?.phone || '',
             cust_Email: shippingAddress?.email || req.user?.email || '',
+        },{
+              headers: {
+                'X-API-Key': process.env.DEVCRAFTOR_API_KEY,
+                'X-API-Secret': process.env.DEVCRAFTOR_SECRET,
+                'Content-Type': 'application/json',
+            },
         });
 
-        if (!payRes.paymentUrl) {
+
+        console.log("DevCraftor Payment Link Response:", response.data);
+        if (!response.data.data.paymentUrl) {
             return res.status(500).json({ error: "Failed to generate payment URL" });
         }
 
@@ -966,10 +966,10 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
 
         await order.save();
 
-        res.json({
+        res.status(200).json({
             success: true,
             message: "Payment order created",
-            paymentLink: payRes.paymentUrl,
+            paymentLink: response.data.data.paymentUrl,
             order: {
                 orderId,
                 id: order._id,
