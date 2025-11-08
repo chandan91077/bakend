@@ -893,7 +893,7 @@ server.on('error', (err) => {
 });
 
 // Create Cashfree payment order and return payment link (secure, backend-only)
-app.post('/api/payments/devcraftor/create-order', authMiddleware, async (req, res) => {
+app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res) => {
     try {
 
        
