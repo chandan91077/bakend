@@ -319,71 +319,71 @@ app.get('/api/medicines', async (req, res) => {
 });
 
 // Sample data seeding endpoint (run once to add sample medicines)
-app.post('/api/medicines/seed', authMiddleware, adminMiddleware, async (req, res) => {
-    try {
-        // Check if medicines already exist
-        const existingCount = await Medicine.countDocuments();
-        if (existingCount > 0) {
-            return res.status(400).json({ 
-                error: 'Medicines already exist. Delete existing medicines first or use the add medicine form.' 
-            });
-        }
+// app.post('/api/medicines/seed', authMiddleware, adminMiddleware, async (req, res) => {
+//     try {
+//         // Check if medicines already exist
+//         const existingCount = await Medicine.countDocuments();
+//         if (existingCount > 0) {
+//             return res.status(400).json({ 
+//                 error: 'Medicines already exist. Delete existing medicines first or use the add medicine form.' 
+//             });
+//         }
 
-        const sampleMedicines = [
-            {
-                image: "https://via.placeholder.com/40",
-                name: "Paracetamol 500mg",
-                batchNo: "BATCH001",
-                category: "tablet",
-                price: 15.50,
-                totalQty: 500,
-                soldQty: 0,
-                expiryDate: new Date("2026-12-31")
-            },
-            {
-                image: "https://via.placeholder.com/40",
-                name: "Cough Syrup - Brohex",
-                batchNo: "BATCH002",
-                category: "syrup",
-                price: 85.00,
-                totalQty: 200,
-                soldQty: 0,
-                expiryDate: new Date("2027-06-30")
-            },
-            {
-                image: "https://via.placeholder.com/40",
-                name: "Amoxicillin 250mg",
-                batchNo: "BATCH003",
-                category: "injection",
-                price: 45.00,
-                totalQty: 150,
-                soldQty: 0,
-                expiryDate: new Date("2026-09-15")
-            },
-            {
-                image: "https://via.placeholder.com/40",
-                name: "Antibacterial Ointment",
-                batchNo: "BATCH004",
-                category: "ointment",
-                price: 120.00,
-                totalQty: 100,
-                soldQty: 0,
-                expiryDate: new Date("2027-03-20")
-            }
-        ];
+//         const sampleMedicines = [
+//             {
+//                 image: "https://via.placeholder.com/40",
+//                 name: "Paracetamol 500mg",
+//                 batchNo: "BATCH001",
+//                 category: "tablet",
+//                 price: 15.50,
+//                 totalQty: 500,
+//                 soldQty: 0,
+//                 expiryDate: new Date("2026-12-31")
+//             },
+//             {
+//                 image: "https://via.placeholder.com/40",
+//                 name: "Cough Syrup - Brohex",
+//                 batchNo: "BATCH002",
+//                 category: "syrup",
+//                 price: 85.00,
+//                 totalQty: 200,
+//                 soldQty: 0,
+//                 expiryDate: new Date("2027-06-30")
+//             },
+//             {
+//                 image: "https://via.placeholder.com/40",
+//                 name: "Amoxicillin 250mg",
+//                 batchNo: "BATCH003",
+//                 category: "injection",
+//                 price: 45.00,
+//                 totalQty: 150,
+//                 soldQty: 0,
+//                 expiryDate: new Date("2026-09-15")
+//             },
+//             {
+//                 image: "https://via.placeholder.com/40",
+//                 name: "Antibacterial Ointment",
+//                 batchNo: "BATCH004",
+//                 category: "ointment",
+//                 price: 120.00,
+//                 totalQty: 100,
+//                 soldQty: 0,
+//                 expiryDate: new Date("2027-03-20")
+//             }
+//         ];
 
-        await Medicine.insertMany(sampleMedicines);
+//         await Medicine.insertMany(sampleMedicines);
         
-        res.status(201).json({ 
-            success: true,
-            message: `Successfully added ${sampleMedicines.length} sample medicines`,
-            count: sampleMedicines.length
-        });
-    } catch (error) {
-        console.error('Error seeding medicines:', error);
-        res.status(500).json({ error: error.message || 'Failed to seed medicines' });
-    }
-});
+//         res.status(201).json({ 
+//             success: true,
+//             message: `Successfully added ${sampleMedicines.length} sample medicines`,
+//             count: sampleMedicines.length
+//         });
+//     } catch (error) {
+//         console.error('Error seeding medicines:', error);
+//         res.status(500).json({ error: error.message || 'Failed to seed medicines' });
+//     }
+// });
 
 // Update medicine stock
 app.post('/api/medicines/:id/updateStock', authMiddleware, async (req, res) => {
@@ -452,7 +452,7 @@ app.post('/api/medicines', authMiddleware, adminMiddleware, async (req, res) => 
             return res.status(400).json({ error: 'Expiry date is required' });
         }
 
-        // Create medicine object
+        // ✅ Create medicine object (fixed placeholder)
         const medicineData = {
             name: name.trim(),
             batchNo: batchNo.trim(),
@@ -461,8 +461,11 @@ app.post('/api/medicines', authMiddleware, adminMiddleware, async (req, res) => 
             totalQty: totalQty,
             soldQty: soldQty || 0,
             expiryDate: new Date(expiryDate),
-            image: image || "https://via.placeholder.com/40"
+            image: image && image.trim() !== "" 
+                ? image.trim() 
+                : "https://placehold.co/40x40?text=No+Img"
         };
+
 
         console.log('Creating medicine with data:', medicineData);
 
