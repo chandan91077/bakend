@@ -49,7 +49,7 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const medicineSchema = new mongoose.Schema({
-    image: { type: String, default: "https://via.placeholder.com/40" },
+    image: { type: String, default: "https://placehold.co/40x40?text=No+Img" },
     name: { type: String, required: true },
     batchNo: { type: String, required: true },
     category: { type: String, required: true },
