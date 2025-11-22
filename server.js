@@ -896,8 +896,9 @@ server.on('error', (err) => {
 });
 
 // Create Cashfree payment order and return payment link (secure, backend-only)
-app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res) => {
+app.post('/api/payments/cashfree/create-order', async (req, res) => {
     try {
+       
         const { items, shippingAddress, totalAmount } = req.body;
 
         if (!items || !Array.isArray(items) || items.length === 0)
@@ -920,13 +921,35 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
             }
         }
 
-        if (stockValidationErrors.length > 0)
-            return res.status(400).json({ error: 'Insufficient stock', details: stockValidationErrors });
+        // if (stockValidationErrors.length > 0)
+        //     return res.status(400).json({ error: 'Insufficient stock', details: stockValidationErrors });
 
         // ✅ Order ID
         const orderId = "ORD" + Date.now();
 
-        // ✅ Create order in DB FIRST (with payment_pending status)
+
+        const response = await axios.post(`${process.env.DEVCRAFTOR_BASE_URL}/v2/partner/payment_links`, {
+            token: process.env.DEVCRAFTOR_TOKEN,
+            orderId,
+            txnAmount: Number(totalAmount).toFixed(2),
+            txnNote: "Order from Anvik Biotecch",
+            cust_Mobile: shippingAddress?.phone || req.user?.phone || '',
+            cust_Email: shippingAddress?.email || req.user?.email || '',
+        },{
+              headers: {
+                'X-API-Key': process.env.DEVCRAFTOR_API_KEY,
+                'X-API-Secret': process.env.DEVCRAFTOR_SECRET,
+                'Content-Type': 'application/json',
+            },
+        });
+
+        
+
+        if (!response.data.data.paymentUrl) {
+            return res.status(500).json({ error: "Failed to generate payment URL" });
+        }
+
+        // ✅ Save order in DB
         const order = new Order({
             orderId,
             items: items.map(i => ({
@@ -936,65 +959,20 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
                 quantity: i.quantity
             })),
             shippingAddress,
-            paymentMethod: 'cashfree',
+            paymentMethod: 'devcraftor',
             totalAmount: Number(totalAmount),
             orderStatus: 'pending',
             paymentStatus: 'pending',
             customer: req.user ? req.user._id : null,
-            cashfreeOrderId: orderId
+            providerOrderId: orderId 
         });
 
-        await order.save();
-        console.log('✅ Order created in DB:', orderId);
-
-        // ✅ Create payment link using DevCraftor or fallback
-        let paymentUrl = null;
-        const frontendUrl = process.env.FRONTEND_URL || 'https://your-frontend.vercel.app';
-        const returnUrl = `${frontendUrl}/customer/order-success.html?orderId=${orderId}`;
-        
-        try {
-            if (process.env.DEVCRAFTOR_BASE_URL && process.env.DEVCRAFTOR_TOKEN) {
-                console.log('🔄 Attempting DevCraftor payment gateway...');
-                const response = await axios.post(`${process.env.DEVCRAFTOR_BASE_URL}/v2/partner/payment_links`, {
-                    token: process.env.DEVCRAFTOR_TOKEN,
-                    orderId,
-                    txnAmount: Number(totalAmount).toFixed(2),
-                    txnNote: "Order from Anvik Biotecch",
-                    cust_Mobile: shippingAddress?.phone || req.user?.phone || '9999999999',
-                    cust_Email: shippingAddress?.email || req.user?.email || 'customer@example.com',
-                    returnUrl: returnUrl, // ✅ Add return URL
-                },{
-                    headers: {
-                        'X-API-Key': process.env.DEVCRAFTOR_API_KEY,
-                        'X-API-Secret': process.env.DEVCRAFTOR_SECRET,
-                        'Content-Type': 'application/json',
-                    },
-                });
-
-                paymentUrl = response.data.data.paymentUrl;
-                console.log('✅ DevCraftor Payment URL generated:', paymentUrl);
-            } else {
-                console.log('⚠️ DevCraftor not configured, using test payment flow');
-            }
-        } catch (paymentErr) {
-            console.warn('⚠️ DevCraftor failed, using fallback:', paymentErr.message);
-        }
-
-        // ✅ FALLBACK: If no payment gateway, create a test payment page
-        if (!paymentUrl) {
-            // Test payment page will process payment and redirect to order-success
-            paymentUrl = `${frontendUrl}/customer/test-payment.html?orderId=${orderId}&returnUrl=${encodeURIComponent(returnUrl)}`;
-            console.log('📄 Using test payment page:', paymentUrl);
-        }
-
-        // ✅ Update order with proper payment gateway info
-        order.paymentGateway = process.env.DEVCRAFTOR_BASE_URL ? 'devcraftor' : 'test';
         await order.save();
 
         res.status(200).json({
             success: true,
             message: "Payment order created",
-            paymentLink: paymentUrl,
+            paymentLink: response.data.data.paymentUrl,
             order: {
                 orderId,
                 id: order._id,
@@ -1003,7 +981,7 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
         });
 
     } catch (err) {
-        console.error("Payment Order Creation Error", err);
+        console.error("DevCraftor Error", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -1071,25 +1049,25 @@ app.post('/api/payments/cashfree/webhook', bodyParser.raw({ type: '*/*' }), asyn
             newPaymentStatus = order.paymentStatus || 'pending';
         }
 
-        // ✅ Update stock when payment is confirmed (only once)
-        if (newPaymentStatus === 'completed' && oldPaymentStatus !== 'completed') {
-            console.log('💰 Payment confirmed! Updating stock for order:', order.orderId);
-            for (const item of order.items) {
-                await Medicine.findByIdAndUpdate(
-                    item.medicine,
-                    { $inc: { soldQty: item.quantity } }
-                );
-            }
-            console.log('✅ Stock updated for order:', order.orderId);
-        }
-
         order.paymentStatus = newPaymentStatus;
         order.orderStatus = newOrderStatus;
         if (referenceId) order.cashfreePaymentId = referenceId;
 
         await order.save();
 
-        console.log('Updated order after webhook:', order.orderId, { paymentStatus: newPaymentStatus, orderStatus: newOrderStatus });
+        // Update stock when payment is confirmed (only once)
+        if (newPaymentStatus === 'completed' && oldPaymentStatus !== 'completed') {
+            // This means payment just got confirmed, update stock
+            for (const item of order.items) {
+                await Medicine.findByIdAndUpdate(
+                    item.medicine,
+                    { $inc: { soldQty: item.quantity } }
+                );
+            }
+            console.log('Stock updated for order:', order.orderId);
+        }
+
+        console.log('Updated order after webhook:', order.orderId, order.paymentStatus, order.orderStatus);
 
         // Acknowledge receipt
         res.json({ ok: true });
@@ -1106,29 +1084,62 @@ app.get('/api/payments/cashfree/verify/:orderId', authMiddleware, async (req, re
         const order = await Order.findOne({ orderId });
         if (!order) return res.status(404).json({ error: 'Order not found' });
 
-        console.log(`✅ Verification check for order ${orderId}:`, { 
-            paymentStatus: order.paymentStatus, 
-            orderStatus: order.orderStatus 
-        });
+        // If payment already completed in DB, return immediately
+        if (order.paymentStatus === 'completed' || order.paymentStatus === 'failed') {
+            return res.json({ orderId: order.orderId, paymentStatus: order.paymentStatus, orderStatus: order.orderStatus });
+        }
 
-        // Return current status from DB
-        res.json({ 
-            orderId: order.orderId, 
-            paymentStatus: order.paymentStatus || 'pending', 
-            orderStatus: order.orderStatus,
-            message: order.paymentStatus === 'completed' ? 'Payment confirmed successfully!' : 'Payment pending...'
-        });
+        // Otherwise, attempt to fetch status from Cashfree if we have a cashfreeOrderId
+        if (!order.cashfreeOrderId) {
+            return res.json({ orderId: order.orderId, paymentStatus: order.paymentStatus || 'pending', orderStatus: order.orderStatus });
+        }
+
+        // Call Cashfree to get latest status
+        let statusResp;
+        try {
+            statusResp = await fetchFn(`${CASHFREE_BASE}/orders/${order.cashfreeOrderId}`, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json',
+                    'x-client-id': CASHFREE_APP_ID,
+                    'x-client-secret': CASHFREE_SECRET,
+                    'x-api-version': '2022-09-01'
+                }
+            });
+        } catch (netErr) {
+            console.error('Network error while verifying Cashfree order:', netErr);
+            return res.status(502).json({ error: 'Payment gateway network error', details: String(netErr) });
+        }
+
+        let statusJson;
+        try {
+            statusJson = await statusResp.json();
+        } catch (err) {
+            const raw = await statusResp.text().catch(() => '<unreadable>');
+            console.error('Failed to parse Cashfree status response', err, raw);
+            return res.status(502).json({ error: 'Invalid response from payment gateway', details: raw });
+        }
+
+        // Inspect returned fields
+        const cfData = statusJson.data || statusJson;
+        const cfStatus = (cfData.order_status || cfData.status || cfData.payment_status || '').toString().toLowerCase();
+
+        if (cfStatus.includes('paid') || cfStatus.includes('success') || cfStatus.includes('completed')) {
+            order.paymentStatus = 'completed';
+            if (order.orderStatus === 'pending') order.orderStatus = 'confirmed';
+        } else if (cfStatus.includes('failed') || cfStatus.includes('cancel')) {
+            order.paymentStatus = 'failed';
+            order.orderStatus = 'cancelled';
+        }
+
+        await order.save();
+
+        return res.json({ orderId: order.orderId, paymentStatus: order.paymentStatus, orderStatus: order.orderStatus, cfResponse: statusJson });
     } catch (err) {
         console.error('Error verifying cashfree order:', err);
         return res.status(500).json({ error: err.message });
     }
 });
-
-// ✅ Do NOT auto-confirm orders without actual payment confirmation!
-// Orders should only be confirmed when:
-// 1. Webhook from payment gateway confirms payment
-// 2. Customer explicitly checks payment status
-// This endpoint is removed to prevent orders from confirming without payment
 
 // Ensure the order success page is directly reachable (helps when static middleware misses it)
 app.get('/customer/order-success.html', (req, res) => {
