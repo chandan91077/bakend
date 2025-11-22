@@ -949,6 +949,8 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
 
         // ✅ Create payment link using DevCraftor or fallback
         let paymentUrl = null;
+        const frontendUrl = process.env.FRONTEND_URL || 'https://your-frontend.vercel.app';
+        const returnUrl = `${frontendUrl}/customer/order-success.html?orderId=${orderId}`;
         
         try {
             if (process.env.DEVCRAFTOR_BASE_URL && process.env.DEVCRAFTOR_TOKEN) {
@@ -960,6 +962,7 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
                     txnNote: "Order from Anvik Biotecch",
                     cust_Mobile: shippingAddress?.phone || req.user?.phone || '9999999999',
                     cust_Email: shippingAddress?.email || req.user?.email || 'customer@example.com',
+                    returnUrl: returnUrl, // ✅ Add return URL
                 },{
                     headers: {
                         'X-API-Key': process.env.DEVCRAFTOR_API_KEY,
@@ -971,17 +974,16 @@ app.post('/api/payments/cashfree/create-order', authMiddleware, async (req, res)
                 paymentUrl = response.data.data.paymentUrl;
                 console.log('✅ DevCraftor Payment URL generated:', paymentUrl);
             } else {
-                console.log('⚠️ DevCraftor not configured, using TEST payment flow');
+                console.log('⚠️ DevCraftor not configured, using test payment flow');
             }
         } catch (paymentErr) {
             console.warn('⚠️ DevCraftor failed, using fallback:', paymentErr.message);
         }
 
-        // ✅ FALLBACK: If no payment gateway, create a test payment URL
+        // ✅ FALLBACK: If no payment gateway, create a test payment page
         if (!paymentUrl) {
-            const frontendUrl = process.env.FRONTEND_URL || 'https://your-frontend.vercel.app';
-            // Create a test payment page that auto-confirms
-            paymentUrl = `${frontendUrl}/customer/test-payment.html?orderId=${orderId}`;
+            // Test payment page will process payment and redirect to order-success
+            paymentUrl = `${frontendUrl}/customer/test-payment.html?orderId=${orderId}&returnUrl=${encodeURIComponent(returnUrl)}`;
             console.log('📄 Using test payment page:', paymentUrl);
         }
 
@@ -1122,57 +1124,11 @@ app.get('/api/payments/cashfree/verify/:orderId', authMiddleware, async (req, re
     }
 });
 
-// ✅ NEW: Manual payment confirmation (for testing or payment without webhook)
-app.post('/api/payments/confirm/:orderId', authMiddleware, async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const order = await Order.findOne({ orderId });
-        
-        if (!order) {
-            return res.status(404).json({ error: 'Order not found' });
-        }
-
-        // Check if already confirmed
-        if (order.paymentStatus === 'completed') {
-            return res.json({ 
-                message: 'Order already confirmed',
-                order: { orderId: order.orderId, paymentStatus: 'completed', orderStatus: 'confirmed' }
-            });
-        }
-
-        console.log('💰 Manually confirming payment for order:', orderId);
-
-        // Update payment status
-        order.paymentStatus = 'completed';
-        order.orderStatus = 'confirmed';
-        await order.save();
-
-        // ✅ Update stock when payment is confirmed
-        console.log('📦 Updating stock for order:', orderId);
-        for (const item of order.items) {
-            const medicine = await Medicine.findById(item.medicine);
-            if (medicine) {
-                medicine.soldQty = (medicine.soldQty || 0) + item.quantity;
-                await medicine.save();
-                console.log(`✅ Updated ${item.name}: soldQty += ${item.quantity}`);
-            }
-        }
-
-        console.log('✅ Order confirmed and stock updated:', orderId);
-
-        res.json({ 
-            message: 'Payment confirmed successfully',
-            order: { 
-                orderId: order.orderId, 
-                paymentStatus: 'completed', 
-                orderStatus: 'confirmed'
-            }
-        });
-    } catch (err) {
-        console.error('Error confirming payment:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// ✅ Do NOT auto-confirm orders without actual payment confirmation!
+// Orders should only be confirmed when:
+// 1. Webhook from payment gateway confirms payment
+// 2. Customer explicitly checks payment status
+// This endpoint is removed to prevent orders from confirming without payment
 
 // Ensure the order success page is directly reachable (helps when static middleware misses it)
 app.get('/customer/order-success.html', (req, res) => {
